@@ -69,10 +69,9 @@ async def decline_product(
 )
 async def get_all_products(
     status: ModerationStatus,
-    limit: int = 20,
-    page: int = 1,
+    limit: int = 20, page: int = 1,
     db: AsyncSession = Depends(get_db),
-    moderator=Depends(get_current_moderator),
+    moderator=Depends(get_current_moderator)
 ):
     return await product_moderation_service.get_all_products(
         db, status=status.value, limit=limit, page=page

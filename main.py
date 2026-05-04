@@ -29,7 +29,10 @@ async def lifespan(app: FastAPI):
                         first_name="Admin",
                         last_name="Moderator",
                     ),
+                    is_admin=True,
                 )
+            elif not admin.is_admin:
+                admin.is_admin = True
             await seed_blocking_reasons(db)
             await db.commit()
     except Exception as e:

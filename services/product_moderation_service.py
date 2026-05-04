@@ -277,10 +277,8 @@ async def list_blocking_reasons(db: AsyncSession) -> list[BlockingReason]:
 
 
 async def get_all_products(
-    db: AsyncSession,
-    status: str,
-    limit: int = 20,
-    page: int = 1,
+    db: AsyncSession, status: str,
+    limit: int = 20, page: int = 1
 ) -> dict:
     """
     Получить список карточек модерации с фильтрацией по статусу и пагинацией.
@@ -290,7 +288,6 @@ async def get_all_products(
     """
     offset = (page - 1) * limit
     
-    # Подсчёт общего количества
     count_query = select(func.count()).select_from(ProductModeration).where(
         ProductModeration.status == status
     )
@@ -299,7 +296,6 @@ async def get_all_products(
     
     total_pages = (total_items + limit - 1) // limit if total_items > 0 else 1
     
-    # Получение данных с пагинацией
     query = (
         select(ProductModeration)
         .where(ProductModeration.status == status)
@@ -310,7 +306,6 @@ async def get_all_products(
     result = await db.execute(query)
     items = result.scalars().all()
     
-    # Построение карточек
     cards = []
     for item in items:
         card = await _build_card(db, item)

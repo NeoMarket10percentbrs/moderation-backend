@@ -24,6 +24,9 @@ class Moderator(Base):
 	is_active: Mapped[bool] = mapped_column(
 		sa.Boolean, nullable=False, default=True, server_default=sa.true()
 	)
+	is_admin: Mapped[bool] = mapped_column(
+		sa.Boolean, nullable=False, default=False, server_default=sa.false()
+	)
 	created_at: Mapped[datetime] = mapped_column(
 		sa.DateTime(timezone=True), server_default=func.now(), nullable=False
 	)

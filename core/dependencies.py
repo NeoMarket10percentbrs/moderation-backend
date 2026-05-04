@@ -61,3 +61,14 @@ def require_internal_token(x_internal_token: str | None = Header(default=None, a
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Неверный внутренний токен",
         )
+
+
+async def require_admin_moderator(
+    moderator: Moderator = Depends(get_current_moderator)
+) -> Moderator:
+    if not moderator.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Требуются права администратора",
+        )
+    return moderator

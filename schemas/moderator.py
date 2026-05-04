@@ -1,3 +1,4 @@
+from uuid import UUID
 from pydantic import BaseModel, EmailStr
 
 
@@ -9,11 +10,12 @@ class ModeratorCreate(BaseModel):
 
 
 class ModeratorRead(BaseModel):
-	id: str
+	id: UUID
 	email: EmailStr
 	first_name: str
 	last_name: str
 	is_active: bool
+	is_admin: bool
 
 	class Config:
 		from_attributes = True

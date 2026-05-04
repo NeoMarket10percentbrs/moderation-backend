@@ -49,6 +49,11 @@ async def login(db: AsyncSession, email: str, password: str) -> TokenResponse:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Неверный email или пароль",
         )
+    if not moderator.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Модератор заблокирован",
+        )
     return await _issue_tokens(db, moderator)
 
 
