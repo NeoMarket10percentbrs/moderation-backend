@@ -67,7 +67,7 @@ class ProductModerationCard(BaseModel):
     class Config:
         from_attributes = True
 
-class PaginatedResult(Generic[T], BaseModel):
+class PaginatedResult(BaseModel, Generic[T]):
     limit: int
     page: int
     total_pages: int
