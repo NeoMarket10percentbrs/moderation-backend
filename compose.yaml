@@ -1,4 +1,22 @@
 services:
+  # -- Database ---------------------------------------------
+  moderation_postgresql:
+    env_file: .env
+    image: postgres:latest
+    container_name: "moderation_database"
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+      PGPORT: ${DB_PORT}
+    volumes:
+      - ./moderation_postgresql_data:/var/lib/postgresql
+    ports:
+      - "${DB_PORT}:${DB_PORT}"
+    networks:
+      - marketplace
+
   # -- App ---------------------------------------------------
   moderation_app:
     build: .
@@ -11,6 +29,12 @@ services:
     depends_on:
       - moderation_postgresql
     restart: unless-stopped
+    networks:
+      - marketplace
 
 volumes:
   moderation_postgresql_data:
+
+networks:
+  marketplace:
+    external: true
