@@ -1,0 +1,16 @@
+services:
+  # -- App ---------------------------------------------------
+  moderation_app:
+    build: .
+    container_name: moderation_app
+    env_file: .env
+    ports:
+      - "${APP_PORT}:${APP_PORT}"
+    environment:
+      DB_HOST: moderation_postgresql
+    depends_on:
+      - moderation_postgresql
+    restart: unless-stopped
+
+volumes:
+  moderation_postgresql_data:

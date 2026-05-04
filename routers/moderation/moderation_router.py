@@ -4,8 +4,9 @@ from core.database import get_db
 from core.dependencies import get_current_moderator
 from schemas.moderation import (
     GetNextRequest, ProductModerationCard, DeclineRequest,
-    BlockingReasonOut
+    BlockingReasonOut, ProductModerationPaginatedResult
 )
+from models.moderation_status import ModerationStatus
 from schemas.product_moderation import ApproveResponse, DeclineResponse
 from services import product_moderation_service
 
@@ -60,6 +61,22 @@ async def decline_product(
         db, product_id, str(moderator.id), data
     )
     return DeclineResponse(status="BLOCKED", hard_block=hard_block)
+
+
+@moderation_router.get(
+    "/v1/products/",
+    response_model=ProductModerationPaginatedResult,
+)
+async def get_all_products(
+    status: ModerationStatus,
+    limit: int = 20,
+    page: int = 1,
+    db: AsyncSession = Depends(get_db),
+    moderator=Depends(get_current_moderator),
+):
+    return await product_moderation_service.get_all_products(
+        db, status=status.value, limit=limit, page=page
+    )
 
 
 @moderation_router.get(

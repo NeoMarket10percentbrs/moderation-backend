@@ -1,0 +1,10 @@
+from enum import Enum
+
+
+class ModerationStatus(Enum):
+    CREATED = "CREATED"
+    ON_MODERATION="ON_MODERATION"
+    BLOCKED = "BLOCKED"
+    MODERATED="MODERATED"
+    HARD_BLOCKED="HARD_BLOCKED"
+    DELETED="DELETED"

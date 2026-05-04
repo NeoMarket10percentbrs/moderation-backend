@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import uuid
 from fastapi import HTTPException, status
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from models.product_moderation import ProductModeration
@@ -273,3 +273,53 @@ async def decline_product(
 async def list_blocking_reasons(db: AsyncSession) -> list[BlockingReason]:
     result = await db.execute(select(BlockingReason))
     return result.scalars().all()
+
+
+
+async def get_all_products(
+    db: AsyncSession,
+    status: str,
+    limit: int = 20,
+    page: int = 1,
+) -> dict:
+    """
+    Получить список карточек модерации с фильтрацией по статусу и пагинацией.
+    
+    Возвращает dict с полями:
+    - limit, page, total_pages, total_items, data
+    """
+    offset = (page - 1) * limit
+    
+    # Подсчёт общего количества
+    count_query = select(func.count()).select_from(ProductModeration).where(
+        ProductModeration.status == status
+    )
+    total_items_result = await db.execute(count_query)
+    total_items = total_items_result.scalar() or 0
+    
+    total_pages = (total_items + limit - 1) // limit if total_items > 0 else 1
+    
+    # Получение данных с пагинацией
+    query = (
+        select(ProductModeration)
+        .where(ProductModeration.status == status)
+        .order_by(ProductModeration.date_updated.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await db.execute(query)
+    items = result.scalars().all()
+    
+    # Построение карточек
+    cards = []
+    for item in items:
+        card = await _build_card(db, item)
+        cards.append(card)
+    
+    return {
+        "limit": limit,
+        "page": page,
+        "total_pages": total_pages,
+        "total_items": total_items,
+        "data": cards,
+    }

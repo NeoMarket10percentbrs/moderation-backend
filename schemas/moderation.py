@@ -1,7 +1,8 @@
 from datetime import datetime
-from typing import Any
+from typing import Generic, List, TypeVar
 from pydantic import BaseModel, Field
 
+T = TypeVar('T')
 
 class GetNextRequest(BaseModel):
     queue_id: int | None = Field(default=None, alias="queueId")
@@ -65,3 +66,13 @@ class ProductModerationCard(BaseModel):
 
     class Config:
         from_attributes = True
+
+class PaginatedResult(Generic[T], BaseModel):
+    limit: int
+    page: int
+    total_pages: int
+    total_items: int
+    data: List[T]
+
+class ProductModerationPaginatedResult(PaginatedResult[ProductModerationCard]):
+    ...

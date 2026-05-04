@@ -5,7 +5,7 @@ from fastapi import FastAPI
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from core.database import engine, Base, AsyncSessionLocal
+from core.database import engine, AsyncSessionLocal, Base
 from core.config import settings
 from routers import routes
 from services.moderator_service import get_moderator_by_email, create_moderator
