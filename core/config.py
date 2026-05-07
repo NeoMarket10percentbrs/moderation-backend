@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     DB_PORT: int = 5432
 
     # Application
-    APP_HOST: str = "127.0.0.1"
+    APP_HOST: str = "0.0.0.0"
     APP_PORT: int
     APP_RELOAD: bool = True
     APP_LOG_LEVEL: str = "debug"
