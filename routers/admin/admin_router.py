@@ -3,7 +3,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import get_db
 from core.dependencies import require_admin_moderator
 from schemas.moderator import ModeratorCreate, ModeratorRead
-from schemas.auth import TokenResponse
 from services import auth_service
 from services.moderator_service import list_moderators, set_moderator_active
 
@@ -15,7 +14,7 @@ admin_router = APIRouter(
 
 
 @admin_router.post(
-    "/register", response_model=TokenResponse,
+    "/register", response_model=ModeratorRead,
     status_code=status.HTTP_201_CREATED,
     summary="Регистрация модератора"
 )
@@ -23,7 +22,8 @@ async def register(
     data: ModeratorCreate,
     db: AsyncSession = Depends(get_db),
 ):
-    return await auth_service.register(db, data)
+    moderator = await auth_service.register(db, data)
+    return ModeratorRead.model_validate(moderator)
 
 
 @admin_router.get("/moderators", response_model=list[ModeratorRead])
