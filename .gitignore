@@ -184,4 +184,4 @@ uploads/
 .uploads/
 .uploads
 
-b2b_postgres_data/
+moderation_postgresql_data/
