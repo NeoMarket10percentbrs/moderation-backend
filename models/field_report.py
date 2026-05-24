@@ -14,6 +14,9 @@ class FieldReport(Base):
         sa.ForeignKey("product_moderation.id", ondelete="CASCADE"),
         nullable=False,
     )
-    field_name: Mapped[str] = mapped_column(sa.String(20), nullable=False)
+    field_path: Mapped[str] = mapped_column("field_name", sa.String(255), nullable=False)
     sku_id: Mapped[sa.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
-    comment: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    message: Mapped[str] = mapped_column("comment", sa.Text, nullable=False)
+    severity: Mapped[str] = mapped_column(
+        sa.String(10), nullable=False, default="ERROR", server_default=sa.text("'ERROR'")
+    )

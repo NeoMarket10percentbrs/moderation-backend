@@ -1,28 +1,30 @@
 from datetime import datetime, timedelta, timezone
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from sqlalchemy.exc import IntegrityError
 from models.refresh_token import RefreshToken
 from models.moderator import Moderator
-from schemas.auth import TokenPairResponse, LoginResponse
-from schemas.moderator import ModeratorRead, ModeratorCreate
+from schemas.auth import TokenResponse
+from schemas.moderator import ModeratorCreateRequest
 from core.security import (
     verify_password, create_access_token,
     generate_refresh_token, hash_refresh_token,
 )
 from core.config import settings
+from core.errors import raise_api_error
 from services.moderator_service import (
     get_moderator_by_email, get_moderator_by_id, create_moderator
 )
 
 
-async def register(db: AsyncSession, data: ModeratorCreate) -> Moderator:
+async def register(db: AsyncSession, data: ModeratorCreateRequest) -> Moderator:
     existing = await get_moderator_by_email(db, data.email)
     if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Модератор с таким email уже существует",
+        raise_api_error(
+            status.HTTP_409_CONFLICT,
+            "CONFLICT",
+            "Email already exists",
         )
 
     new_moderator = await create_moderator(db, data)
@@ -31,10 +33,11 @@ async def register(db: AsyncSession, data: ModeratorCreate) -> Moderator:
     except IntegrityError as exc:
         await db.rollback()
         if "unique" in str(exc.orig).lower() or "moderators_email_key" in str(exc.orig):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Модератор с таким email уже существует",
-            ) from exc
+            raise_api_error(
+                status.HTTP_409_CONFLICT,
+                "CONFLICT",
+                "Email already exists",
+            )
         raise
 
     await db.refresh(new_moderator)
@@ -42,26 +45,26 @@ async def register(db: AsyncSession, data: ModeratorCreate) -> Moderator:
     return new_moderator
 
 
-async def login(db: AsyncSession, email: str, password: str) -> LoginResponse:
+async def login(db: AsyncSession, email: str, password: str) -> TokenResponse:
     moderator = await get_moderator_by_email(db, email)
     if not moderator or not verify_password(password, moderator.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Неверный email или пароль",
+        raise_api_error(
+            status.HTTP_401_UNAUTHORIZED,
+            "UNAUTHORIZED",
+            "Invalid credentials",
         )
     if not moderator.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Модератор заблокирован",
+        raise_api_error(
+            status.HTTP_403_FORBIDDEN,
+            "FORBIDDEN",
+            "Moderator is inactive",
         )
+    moderator.last_login_at = datetime.now(timezone.utc)
     tokens = await _issue_tokens(db, moderator)
-    return LoginResponse(
-        user=ModeratorRead.model_validate(moderator),
-        **tokens,
-    )
+    return TokenResponse(**tokens)
 
 
-async def refresh_tokens(db: AsyncSession, raw_token: str) -> TokenPairResponse:
+async def refresh_tokens(db: AsyncSession, raw_token: str) -> TokenResponse:
     token_hash = hash_refresh_token(raw_token)
 
     result = await db.execute(
@@ -74,9 +77,10 @@ async def refresh_tokens(db: AsyncSession, raw_token: str) -> TokenPairResponse:
     db_token = result.scalar_one_or_none()
 
     if not db_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Невалидный или истёкший refresh token",
+        raise_api_error(
+            status.HTTP_401_UNAUTHORIZED,
+            "UNAUTHORIZED",
+            "Invalid refresh token",
         )
 
     db_token.revoked = True
@@ -84,7 +88,7 @@ async def refresh_tokens(db: AsyncSession, raw_token: str) -> TokenPairResponse:
 
     moderator = await get_moderator_by_id(db, db_token.moderator_id)
     tokens = await _issue_tokens(db, moderator)
-    return TokenPairResponse(**tokens)
+    return TokenResponse(**tokens)
 
 
 async def logout(db: AsyncSession, raw_token: str) -> None:
@@ -101,7 +105,8 @@ async def logout(db: AsyncSession, raw_token: str) -> None:
 
 
 async def _issue_tokens(db: AsyncSession, moderator: Moderator) -> dict:
-    access_token = create_access_token(str(moderator.id))
+    role = moderator.role or ("ADMIN" if moderator.is_admin else "MODERATOR")
+    access_token = create_access_token(str(moderator.id), role)
     raw_refresh = generate_refresh_token()
 
     db.add(RefreshToken(
@@ -131,5 +136,7 @@ async def _issue_tokens(db: AsyncSession, moderator: Moderator) -> dict:
         "refresh_token": raw_refresh,
         "token_type": "Bearer",
         "expires_in": int(settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60),
+        "user_id": str(moderator.id),
+        "role": role,
     }
 

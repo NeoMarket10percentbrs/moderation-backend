@@ -2,6 +2,9 @@ import os
 from contextlib import asynccontextmanager
 from fastapi.staticfiles import StaticFiles
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -10,7 +13,8 @@ from core.config import settings
 from routers import routes
 from services.moderator_service import get_moderator_by_email, create_moderator
 from services.blocking_reason_service import seed_blocking_reasons
-from schemas.moderator import ModeratorCreate
+from schemas.moderator import ModeratorCreateRequest, ModeratorRole
+from core.errors import error_code_for_status
 
 load_dotenv()
 
@@ -23,11 +27,12 @@ async def lifespan(app: FastAPI):
             if not admin:
                 await create_moderator(
                     db,
-                    ModeratorCreate(
+                    ModeratorCreateRequest(
                         email=settings.ADMIN_EMAIL,
                         password=settings.ADMIN_PASSWORD,
                         first_name="Admin",
                         last_name="Moderator",
+                        role=ModeratorRole.ADMIN,
                     ),
                     is_admin=True,
                 )
@@ -51,6 +56,38 @@ app = FastAPI(
     title="NEO Moderation", version="1.0.0",
     lifespan=lifespan, debug=settings.DEBUG
 )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(_, exc: StarletteHTTPException):
+    if isinstance(exc.detail, dict) and "code" in exc.detail and "message" in exc.detail:
+        payload = exc.detail
+    else:
+        payload = {
+            "code": error_code_for_status(exc.status_code),
+            "message": str(exc.detail) if exc.detail else "HTTP error",
+        }
+    return JSONResponse(status_code=exc.status_code, content=payload)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(_, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=400,
+        content={
+            "code": "BAD_REQUEST",
+            "message": "Validation error",
+            "details": {"errors": exc.errors()},
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(_, __):
+    return JSONResponse(
+        status_code=500,
+        content={"code": "INTERNAL_ERROR", "message": "Internal server error"},
+    )
 
 app.add_middleware(
     CORSMiddleware,

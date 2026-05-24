@@ -4,19 +4,35 @@ from uuid import UUID
 from pydantic import BaseModel
 
 
-class ProductEventType(str, Enum):
-    CREATED = "CREATED"
-    EDITED = "EDITED"
-    DELETED = "DELETED"
+class B2BEventType(str, Enum):
+    PRODUCT_CREATED = "PRODUCT_CREATED"
+    PRODUCT_EDITED = "PRODUCT_EDITED"
+    PRODUCT_DELETED = "PRODUCT_DELETED"
 
 
-class ProductEventIn(BaseModel):
-    idempotency_key: UUID
+class EventProductCreated(BaseModel):
     product_id: UUID
     seller_id: UUID
-    event: ProductEventType
-    date: datetime
+    category_id: UUID | None = None
+    queue_priority: int | None = 3
+    json_after: dict
 
 
-class EventProcessedResponse(BaseModel):
-    status: str
+class EventProductEdited(BaseModel):
+    product_id: UUID
+    seller_id: UUID
+    category_id: UUID | None = None
+    queue_priority: int | None = 3
+    json_before: dict
+    json_after: dict
+
+
+class EventProductDeleted(BaseModel):
+    product_id: UUID
+
+
+class IncomingB2BEvent(BaseModel):
+    event_type: B2BEventType
+    idempotency_key: UUID
+    occurred_at: datetime
+    payload: EventProductCreated | EventProductEdited | EventProductDeleted

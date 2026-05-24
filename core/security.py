@@ -20,14 +20,14 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(password_byte, hashed_byte)
 
 
-def create_access_token(moderator_id: str) -> str:
+def create_access_token(moderator_id: str, role: str) -> str:
     now = datetime.now(timezone.utc)
     expire = now + timedelta(
         minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
     )
     payload = {
         "sub": moderator_id,
-        "role": "moderator",
+        "role": role,
         "iat": int(now.timestamp()),
         "exp": int(expire.timestamp()),
         "jti": str(uuid.uuid4()),
@@ -37,19 +37,20 @@ def create_access_token(moderator_id: str) -> str:
     return jwt.encode(payload, secret, algorithm=algorithm)
 
 
-def decode_access_token(token: str) -> str:
+def decode_access_token(token: str) -> dict:
     secret = settings.SECRET_KEY
     algorithm = settings.ALGORITHM
     payload = jwt.decode(token, secret, algorithms=[algorithm])
-
-    if payload.get("role") != "moderator":
-        raise JWTError("Invalid token role")
 
     moderator_id: str | None = payload.get("sub")
     if moderator_id is None:
         raise JWTError("Missing subject")
 
-    return moderator_id
+    role: str | None = payload.get("role")
+    if not role:
+        raise JWTError("Missing role")
+
+    return {"moderator_id": moderator_id, "role": role}
 
 
 def generate_refresh_token() -> str:

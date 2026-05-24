@@ -1,40 +1,48 @@
 from datetime import datetime, timezone
 import uuid
-from fastapi import HTTPException, status
-from sqlalchemy import select, delete, func
+import sqlalchemy as sa
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
-from models.product_moderation import ProductModeration
-from models.processed_event import ProcessedEvent
-from models.field_report import FieldReport
-from models.blocking_reason import BlockingReason
-from schemas.events import ProductEventIn
+from models import Ticket, ProcessedEvent, FieldReport, BlockingReason, TicketHistory, TicketBlockingReason
+from schemas.events import IncomingB2BEvent, B2BEventType, EventProductCreated, EventProductEdited, EventProductDeleted
 from schemas.moderation import (
-    DeclineRequest, ProductModerationCard, BlockingHistory,
-    BlockingReasonOut, FieldReportOut
+    TicketResponse, TicketDetailResponse, FieldReport as FieldReportSchema,
+    TicketHistoryEntry, BlockDecisionRequest
 )
-from services.b2b_client import fetch_product, send_moderation_event
-from services.moderation_queue import get_next as get_next_from_queue
+from schemas.blocking_reason import BlockingReasonResponse
+from core.errors import raise_api_error
+from services.b2b_client import send_moderation_event
 
 
-def _sum_active_quantity(product_data: dict) -> int:
-    skus = product_data.get("skus") or []
-    total = 0
-    for sku in skus:
-        try:
-            total += int(sku.get("active_quantity") or 0)
-        except (TypeError, ValueError):
-            continue
-    return total
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-def _queue_for_edit(existing: ProductModeration, total_active_quantity: int) -> int:
-    if existing.blocking_reason_id is not None:
-        return 2
-    return 3 if total_active_quantity > 0 else 4
+def _has_skus(ticket: Ticket) -> bool:
+    payload = ticket.json_after
+    if not isinstance(payload, dict):
+        return False
+    skus = payload.get("skus")
+    return isinstance(skus, list) and len(skus) > 0
 
 
-async def handle_b2b_event(db: AsyncSession, payload: ProductEventIn) -> dict:
+async def add_history_entry(
+    db: AsyncSession,
+    ticket_id: uuid.UUID,
+    action: str,
+    moderator_id: uuid.UUID | None = None,
+    comment: str | None = None,
+) -> None:
+    db.add(TicketHistory(
+        ticket_id=ticket_id,
+        action=action,
+        moderator_id=moderator_id,
+        comment=comment,
+    ))
+
+
+async def handle_b2b_event(db: AsyncSession, payload: IncomingB2BEvent) -> bool:
     result = await db.execute(
         select(ProcessedEvent).where(
             ProcessedEvent.sender_service == "b2b",
@@ -43,49 +51,69 @@ async def handle_b2b_event(db: AsyncSession, payload: ProductEventIn) -> dict:
     )
     existing_event = result.scalar_one_or_none()
     if existing_event:
-        return existing_event.response_cached or {"status": "duplicate"}
+        return True
 
-    response_payload: dict = {"status": "processed"}
-
-    if payload.event == payload.event.DELETED:
+    if payload.event_type == B2BEventType.PRODUCT_DELETED:
         await db.execute(
-            delete(ProductModeration).where(ProductModeration.product_id == payload.product_id)
+            delete(Ticket).where(Ticket.product_id == payload.payload.product_id)
         )
     else:
-        product_data = await fetch_product(str(payload.product_id))
-        total_active_quantity = _sum_active_quantity(product_data)
+        if payload.event_type == B2BEventType.PRODUCT_CREATED:
+            data = payload.payload
+            if not isinstance(data, EventProductCreated):
+                raise_api_error(400, "BAD_REQUEST", "Invalid payload")
+            kind = "CREATE"
+            json_before = None
+            json_after = data.json_after
+            queue_priority = data.queue_priority or 3
+        else:
+            data = payload.payload
+            if not isinstance(data, EventProductEdited):
+                raise_api_error(400, "BAD_REQUEST", "Invalid payload")
+            kind = "EDIT"
+            json_before = data.json_before
+            json_after = data.json_after
+            queue_priority = data.queue_priority or 3
 
         result = await db.execute(
-            select(ProductModeration).where(ProductModeration.product_id == payload.product_id)
+            select(Ticket).where(Ticket.product_id == data.product_id)
         )
-        item = result.scalar_one_or_none()
+        ticket = result.scalar_one_or_none()
+        if ticket is None:
+            ticket = Ticket(
+                product_id=data.product_id,
+                seller_id=data.seller_id,
+            )
+            db.add(ticket)
+            await db.flush()
 
-        if payload.event == payload.event.CREATED or item is None:
-            if item is None:
-                item = ProductModeration(
-                    product_id=payload.product_id,
-                    seller_id=payload.seller_id,
-                )
-                db.add(item)
-            item.json_before = None
-            item.json_after = product_data
-            item.status = "PENDING"
-            item.queue_priority = 1
-            item.total_active_quantity = total_active_quantity
-            item.date_moderation = None
-        else:
-            item.json_before = item.json_after
-            item.json_after = product_data
-            item.status = "PENDING"
-            item.total_active_quantity = total_active_quantity
-            item.queue_priority = _queue_for_edit(item, total_active_quantity)
+        ticket.category_id = data.category_id
+        ticket.kind = kind
+        ticket.status = "PENDING"
+        ticket.queue_priority = queue_priority
+        ticket.json_before = json_before
+        ticket.json_after = json_after
+        ticket.assigned_moderator_id = None
+        ticket.claimed_at = None
+        ticket.claim_expires_at = None
+        ticket.decision_at = None
+        ticket.decision_comment = None
+        ticket.blocking_reason_id = None
+
+        await db.execute(
+            delete(FieldReport).where(FieldReport.product_moderation_id == ticket.id)
+        )
+        await db.execute(
+            delete(TicketBlockingReason).where(TicketBlockingReason.ticket_id == ticket.id)
+        )
+        await add_history_entry(db, ticket.id, "CREATED")
 
     db.add(
         ProcessedEvent(
             sender_service="b2b",
             idempotency_key=payload.idempotency_key,
-            response_cached=response_payload,
-            processed_at=datetime.now(timezone.utc),
+            response_cached={"status": "accepted"},
+            processed_at=_now(),
         )
     )
 
@@ -93,100 +121,142 @@ async def handle_b2b_event(db: AsyncSession, payload: ProductEventIn) -> dict:
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        return {"status": "duplicate"}
 
-    return response_payload
+    return False
 
-
-async def get_next_card(db: AsyncSession, moderator_id: str, queue_id: int | None) -> ProductModeration | None:
-    """
-        Один get-next = одна карточка переходит из PENDING в IN_REVIEW с moderator_id
-        Повторный get-next с тем же queueId возьмёт следующую карточку PENDING, а не ту же самую
-        Товар, который взял, уже IN_REVIEW — он исключается из выборки PENDING
-        работаешь с товаром (смотришь json_before/json_after, принимаешь решение) 
-        и явно вызываешь approve или decline.После этого товар уходит из очереди (MODERATED/BLOCKED/HARD_BLOCKED).
-        Если взял товар и ничего не сделал — он останется в IN_REVIEW навсегда 
-        (таймаут возврата в PENDING не реализован, это в планах на будущее).
-    """
-    item = await get_next_from_queue(db, moderator_id=moderator_id, queue_id=queue_id)
-    if item is not None:
-        await db.commit()
-        await db.refresh(item)
-    
-    return item 
+def _to_ticket_response(ticket: Ticket) -> TicketResponse:
+    return TicketResponse.model_validate(ticket)
 
 
-async def _build_card(db: AsyncSession, item: ProductModeration) -> ProductModerationCard:
+async def get_ticket(db: AsyncSession, ticket_id: str) -> Ticket:
+    ticket_uuid = uuid.UUID(ticket_id)
+    result = await db.execute(select(Ticket).where(Ticket.id == ticket_uuid))
+    ticket = result.scalar_one_or_none()
+    if not ticket:
+        raise_api_error(404, "NOT_FOUND", "Ticket not found")
+    return ticket
+
+
+async def build_ticket_detail(db: AsyncSession, ticket: Ticket) -> TicketDetailResponse:
     field_reports_result = await db.execute(
-        select(FieldReport).where(FieldReport.product_moderation_id == item.id)
+        select(FieldReport).where(FieldReport.product_moderation_id == ticket.id)
     )
     field_reports = field_reports_result.scalars().all()
 
-    blocking_reason = None
-    if item.blocking_reason_id:
-        reason_result = await db.execute(
-            select(BlockingReason).where(BlockingReason.id == item.blocking_reason_id)
-        )
-        blocking_reason = reason_result.scalar_one_or_none()
-
-    history = None
-    if blocking_reason or field_reports:
-        history = BlockingHistory(
-            blocking_reason=BlockingReasonOut.model_validate(blocking_reason)
-            if blocking_reason else None,
-            field_reports=[FieldReportOut.model_validate(fr) for fr in field_reports],
-        )
-
-    return ProductModerationCard(
-        id=str(item.id),
-        product_id=str(item.product_id),
-        seller_id=str(item.seller_id),
-        status=item.status,
-        queue_priority=item.queue_priority,
-        total_active_quantity=item.total_active_quantity,
-        json_before=item.json_before,
-        json_after=item.json_after,
-        blocking_reason_id=str(item.blocking_reason_id) if item.blocking_reason_id else None,
-        moderator_id=str(item.moderator_id) if item.moderator_id else None,
-        moderator_comment=item.moderator_comment,
-        date_created=item.date_created,
-        date_updated=item.date_updated,
-        date_moderation=item.date_moderation,
-        blocking_history=history
+    reasons_result = await db.execute(
+        select(BlockingReason)
+        .join(TicketBlockingReason, TicketBlockingReason.reason_id == BlockingReason.id)
+        .where(TicketBlockingReason.ticket_id == ticket.id)
     )
+    reasons = reasons_result.scalars().all()
+
+    history_result = await db.execute(
+        select(TicketHistory).where(TicketHistory.ticket_id == ticket.id)
+        .order_by(TicketHistory.at.asc())
+    )
+    history = history_result.scalars().all()
+
+    detail = TicketDetailResponse.model_validate(ticket)
+    detail.field_reports = [
+        FieldReportSchema(
+            field_path=fr.field_path,
+            message=fr.message,
+            severity=fr.severity,
+        )
+        for fr in field_reports
+    ]
+    detail.blocking_reasons = [BlockingReasonResponse.model_validate(r) for r in reasons]
+    detail.decision_comment = ticket.decision_comment
+    detail.history = [
+        TicketHistoryEntry(
+            at=h.at,
+            action=h.action,
+            moderator_id=h.moderator_id,
+            comment=h.comment,
+        )
+        for h in history
+    ]
+    return detail
 
 
-async def approve_product(db: AsyncSession, product_id: str, moderator_id: str) -> None:
-    product_uuid = uuid.UUID(product_id)
+async def list_tickets(
+    db: AsyncSession,
+    limit: int,
+    offset: int,
+    status: str | None = None,
+    moderator_id: str | None = None,
+    product_id: str | None = None,
+    seller_id: str | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+) -> tuple[list[Ticket], int]:
+    filters: list[sa.ColumnElement[bool]] = []
+    if status:
+        filters.append(Ticket.status == status)
+    if moderator_id:
+        filters.append(Ticket.assigned_moderator_id == uuid.UUID(moderator_id))
+    if product_id:
+        filters.append(Ticket.product_id == uuid.UUID(product_id))
+    if seller_id:
+        filters.append(Ticket.seller_id == uuid.UUID(seller_id))
+    if created_from:
+        filters.append(Ticket.created_at >= created_from)
+    if created_to:
+        filters.append(Ticket.created_at <= created_to)
+
+    count_result = await db.execute(
+        sa.select(sa.func.count()).select_from(Ticket).where(*filters)
+    )
+    total = count_result.scalar() or 0
+
     result = await db.execute(
-        select(ProductModeration).where(ProductModeration.product_id == product_uuid)
+        select(Ticket).where(*filters)
+        .order_by(Ticket.created_at.desc())
+        .offset(offset)
+        .limit(limit)
     )
-    item = result.scalar_one_or_none()
+    return result.scalars().all(), total
 
-    if not item or item.status != "IN_REVIEW":
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Карточка не найдена")
-    if str(item.moderator_id) != moderator_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Нет доступа")
 
-    product_data = await fetch_product(product_id)
-    if not (product_data.get("skus") or []):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Товар не содержит SKU",
-        )
+async def release_ticket(db: AsyncSession, ticket: Ticket, moderator_id: uuid.UUID, is_admin: bool) -> None:
+    if ticket.status != "IN_REVIEW":
+        raise_api_error(409, "TICKET_WRONG_STATUS", "Ticket is not in review")
+    if not is_admin and ticket.assigned_moderator_id != moderator_id:
+        raise_api_error(409, "TICKET_WRONG_OWNER", "Ticket is assigned to another moderator")
 
-    item.status = "MODERATED"
-    item.date_moderation = datetime.now(timezone.utc)
-    item.blocking_reason_id = None
-    item.moderator_comment = None
+    ticket.status = "PENDING"
+    ticket.assigned_moderator_id = None
+    ticket.claimed_at = None
+    ticket.claim_expires_at = None
+    await add_history_entry(db, ticket.id, "RELEASED", moderator_id)
+    await db.commit()
 
-    await db.execute(
-        delete(FieldReport).where(FieldReport.product_moderation_id == item.id)
-    )
+
+async def approve_ticket(
+    db: AsyncSession,
+    ticket: Ticket,
+    moderator_id: uuid.UUID,
+    comment: str | None = None,
+) -> None:
+    if ticket.status != "IN_REVIEW":
+        raise_api_error(409, "TICKET_WRONG_STATUS", "Ticket is not in review")
+    if ticket.assigned_moderator_id != moderator_id:
+        raise_api_error(403, "FORBIDDEN", "Ticket is assigned to another moderator")
+    if not _has_skus(ticket):
+        raise_api_error(409, "PRODUCT_NO_SKU", "Product has no SKU")
+
+    ticket.status = "APPROVED"
+    ticket.decision_at = _now()
+    ticket.decision_comment = comment
+    ticket.blocking_reason_id = None
+
+    await db.execute(delete(FieldReport).where(FieldReport.product_moderation_id == ticket.id))
+    await db.execute(delete(TicketBlockingReason).where(TicketBlockingReason.ticket_id == ticket.id))
+    await add_history_entry(db, ticket.id, "APPROVED", moderator_id)
 
     payload = {
         "idempotency_key": str(uuid.uuid4()),
-        "product_id": product_id,
+        "product_id": str(ticket.product_id),
         "event_type": "MODERATED",
     }
 
@@ -198,63 +268,64 @@ async def approve_product(db: AsyncSession, product_id: str, moderator_id: str) 
         raise
 
 
-async def decline_product(
-    db: AsyncSession, product_id: str, moderator_id: str, data: DeclineRequest
-) -> bool:
-    product_uuid = uuid.UUID(product_id)
-    result = await db.execute(
-        select(ProductModeration).where(ProductModeration.product_id == product_uuid)
-    )
-    item = result.scalar_one_or_none()
+async def block_ticket(
+    db: AsyncSession,
+    ticket: Ticket,
+    moderator_id: uuid.UUID,
+    data: BlockDecisionRequest,
+) -> None:
+    if ticket.status != "IN_REVIEW":
+        raise_api_error(409, "TICKET_WRONG_STATUS", "Ticket is not in review")
+    if ticket.assigned_moderator_id != moderator_id:
+        raise_api_error(409, "TICKET_WRONG_OWNER", "Ticket is assigned to another moderator")
 
-    if not item or item.status != "IN_REVIEW":
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Карточка не найдена")
-    if str(item.moderator_id) != moderator_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Нет доступа")
-
-    reason_uuid = uuid.UUID(data.blocking_reason_id)
-    reason_result = await db.execute(
-        select(BlockingReason).where(BlockingReason.id == reason_uuid)
+    reasons_result = await db.execute(
+        select(BlockingReason).where(BlockingReason.id.in_(data.blocking_reason_ids))
     )
-    reason = reason_result.scalar_one_or_none()
-    if not reason:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Причина блокировки не найдена",
-        )
+    reasons = reasons_result.scalars().all()
+    if len(reasons) != len(data.blocking_reason_ids):
+        raise_api_error(404, "NOT_FOUND", "Blocking reason not found")
 
-    await db.execute(
-        delete(FieldReport).where(FieldReport.product_moderation_id == item.id)
-    )
+    await db.execute(delete(FieldReport).where(FieldReport.product_moderation_id == ticket.id))
+    await db.execute(delete(TicketBlockingReason).where(TicketBlockingReason.ticket_id == ticket.id))
 
     for report in data.field_reports:
         db.add(FieldReport(
-            product_moderation_id=item.id,
-            field_name=report.field_name,
-            sku_id=report.sku_id,
-            comment=report.comment,
+            product_moderation_id=ticket.id,
+            field_path=report.field_path,
+            message=report.message,
+            severity=report.severity,
         ))
 
-    item.blocking_reason_id = reason.id
-    item.moderator_comment = data.moderator_comment
-    item.status = "HARD_BLOCKED" if reason.hard_block else "BLOCKED"
-    item.date_moderation = datetime.now(timezone.utc)
+    for reason in reasons:
+        db.add(TicketBlockingReason(ticket_id=ticket.id, reason_id=reason.id))
+
+    is_hard_block = any(reason.hard_block for reason in reasons)
+    ticket.status = "HARD_BLOCKED" if is_hard_block else "BLOCKED"
+    ticket.decision_at = _now()
+    ticket.decision_comment = data.comment
+    ticket.blocking_reason_id = reasons[0].id if reasons else None
+
+    await add_history_entry(
+        db,
+        ticket.id,
+        "HARD_BLOCKED" if is_hard_block else "BLOCKED",
+        moderator_id,
+        data.comment,
+    )
 
     payload = {
         "idempotency_key": str(uuid.uuid4()),
-        "product_id": product_id,
+        "product_id": str(ticket.product_id),
         "event_type": "BLOCKED",
-        "hard_block": bool(reason.hard_block),
-        "blocking_reason": {
-            "id": str(reason.id),
-            "title": reason.title,
-            "comment": data.moderator_comment or "",
-        },
+        "hard_block": bool(is_hard_block),
+        "blocking_reason_ids": [str(reason.id) for reason in reasons],
+        "comment": data.comment or "",
         "field_reports": [
             {
-                "field_name": report.field_name,
-                "sku_id": report.sku_id,
-                "comment": report.comment,
+                "field_path": report.field_path,
+                "message": report.message,
+                "severity": report.severity,
             }
             for report in data.field_reports
         ],
@@ -266,55 +337,3 @@ async def decline_product(
     except Exception:
         await db.rollback()
         raise
-
-    return bool(reason.hard_block)
-
-
-async def list_blocking_reasons(db: AsyncSession) -> list[BlockingReason]:
-    result = await db.execute(select(BlockingReason))
-    return result.scalars().all()
-
-
-
-async def get_all_products(
-    db: AsyncSession, status: str,
-    limit: int = 20, page: int = 1
-) -> dict:
-    """
-    Получить список карточек модерации с фильтрацией по статусу и пагинацией.
-    
-    Возвращает dict с полями:
-    - limit, page, total_pages, total_items, data
-    """
-    offset = (page - 1) * limit
-    
-    count_query = select(func.count()).select_from(ProductModeration).where(
-        ProductModeration.status == status
-    )
-    total_items_result = await db.execute(count_query)
-    total_items = total_items_result.scalar() or 0
-    
-    total_pages = (total_items + limit - 1) // limit if total_items > 0 else 1
-    
-    query = (
-        select(ProductModeration)
-        .where(ProductModeration.status == status)
-        .order_by(ProductModeration.date_updated.desc())
-        .offset(offset)
-        .limit(limit)
-    )
-    result = await db.execute(query)
-    items = result.scalars().all()
-    
-    cards = []
-    for item in items:
-        card = await _build_card(db, item)
-        cards.append(card)
-    
-    return {
-        "limit": limit,
-        "page": page,
-        "total_pages": total_pages,
-        "total_items": total_items,
-        "data": cards,
-    }

@@ -1,73 +1,95 @@
+from datetime import datetime, timedelta, timezone
 import sqlalchemy as sa
 import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
-from models import ProductModeration
-from fastapi import HTTPException, status
+from models import Ticket, TicketHistory
 
 
-QUEUE_IDS = (1, 2, 3, 4)
+async def return_expired_tickets(db: AsyncSession) -> None:
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        sa.select(Ticket)
+        .where(Ticket.status == "IN_REVIEW", Ticket.claim_expires_at < now)
+    )
+    expired = result.scalars().all()
+    for ticket in expired:
+        moderator_id = ticket.assigned_moderator_id
+        ticket.status = "PENDING"
+        ticket.assigned_moderator_id = None
+        ticket.claimed_at = None
+        ticket.claim_expires_at = None
+        db.add(TicketHistory(
+            ticket_id=ticket.id,
+            action="AUTO_RETURNED",
+            moderator_id=moderator_id,
+        ))
 
 
-def _queue_filters(queue_id: int) -> list[sa.ColumnElement[bool]]:
-    base_filters: list[sa.ColumnElement[bool]] = [
-        ProductModeration.status == "PENDING",
-    ]
-
-    if queue_id == 1:
-        return base_filters + [ProductModeration.date_moderation.is_(None)]
-
-    if queue_id == 2:
-        return base_filters + [
-            ProductModeration.date_moderation.is_not(None),
-            ProductModeration.blocking_reason_id.is_not(None),
-        ]
-
-    if queue_id == 3:
-        return base_filters + [
-            ProductModeration.date_moderation.is_not(None),
-            ProductModeration.blocking_reason_id.is_(None),
-            ProductModeration.total_active_quantity > 0,
-        ]
-
-    return base_filters + [
-        ProductModeration.date_moderation.is_not(None),
-        ProductModeration.blocking_reason_id.is_(None),
-        ProductModeration.total_active_quantity == 0,
-    ]
-
-
-async def get_next(db: AsyncSession, moderator_id: sa.UUID, queue_id: int | None = None) -> ProductModeration | None:
+async def claim_next_ticket(
+    db: AsyncSession,
+    moderator_id: str | uuid.UUID,
+    queue_priority: int | None = None,
+    category_ids: list[uuid.UUID] | None = None,
+) -> Ticket | None:
     if isinstance(moderator_id, str):
         moderator_id = uuid.UUID(moderator_id)
 
-    if queue_id is not None and queue_id not in QUEUE_IDS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="queue_id must be in 1..4",
-        )
-    
-    queue_ids = (queue_id,) if queue_id is not None else QUEUE_IDS
+    await return_expired_tickets(db)
+
+    filters = [Ticket.status == "PENDING"]
+    if queue_priority is not None:
+        filters.append(Ticket.queue_priority == queue_priority)
+    if category_ids:
+        filters.append(Ticket.category_id.in_(category_ids))
+
+    stmt = (
+        sa.select(Ticket)
+        .where(*filters)
+        .order_by(Ticket.queue_priority.asc(), Ticket.created_at.asc())
+        .with_for_update(skip_locked=True)
+        .limit(1)
+    )
+
+    result = await db.execute(stmt)
+    ticket = result.scalar_one_or_none()
+    if not ticket:
+        return None
+
+    now = datetime.now(timezone.utc)
+    ticket.status = "IN_REVIEW"
+    ticket.assigned_moderator_id = moderator_id
+    ticket.claimed_at = now
+    ticket.claim_expires_at = now + timedelta(minutes=30)
+    await db.flush()
+    return ticket
 
 
-    for current_queue in queue_ids:
-        filters = _queue_filters(current_queue)
+async def list_pending_tickets(
+    db: AsyncSession,
+    limit: int,
+    offset: int,
+    queue_priority: int | None = None,
+    category_id: uuid.UUID | None = None,
+    seller_id: uuid.UUID | None = None,
+) -> tuple[list[Ticket], int]:
+    filters = [Ticket.status == "PENDING"]
+    if queue_priority is not None:
+        filters.append(Ticket.queue_priority == queue_priority)
+    if category_id is not None:
+        filters.append(Ticket.category_id == category_id)
+    if seller_id is not None:
+        filters.append(Ticket.seller_id == seller_id)
 
-        stmt = (
-            sa.select(ProductModeration)
-            .where(*filters)
-            .order_by(ProductModeration.date_updated.asc())
-            .with_for_update(skip_locked=True)
-            .limit(1)
-        )
+    count_result = await db.execute(
+        sa.select(sa.func.count()).select_from(Ticket).where(*filters)
+    )
+    total = count_result.scalar() or 0
 
-        result = await db.execute(stmt)
-        item = result.scalar_one_or_none()
-        if not item:
-            continue
-
-        item.status = "IN_REVIEW"
-        item.moderator_id = moderator_id
-        await db.flush()
-        return item
-
-    return None
+    result = await db.execute(
+        sa.select(Ticket)
+        .where(*filters)
+        .order_by(Ticket.queue_priority.asc(), Ticket.created_at.asc())
+        .offset(offset)
+        .limit(limit)
+    )
+    return result.scalars().all(), total

@@ -6,7 +6,7 @@ from uuid import uuid4
 from core.database import Base
 
 
-class ProductModeration(Base):
+class Ticket(Base):
     __tablename__ = "product_moderation"
 
     id: Mapped[sa.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -14,6 +14,10 @@ class ProductModeration(Base):
         UUID(as_uuid=True), nullable=False, unique=True, index=True
     )
     seller_id: Mapped[sa.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    category_id: Mapped[sa.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    kind: Mapped[str] = mapped_column(
+        sa.String(10), nullable=False, default="CREATE", server_default=sa.text("'CREATE'")
+    )
     status: Mapped[str] = mapped_column(sa.String(20), nullable=False, default="PENDING")
     queue_priority: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     total_active_quantity: Mapped[int] = mapped_column(
@@ -24,16 +28,26 @@ class ProductModeration(Base):
     blocking_reason_id: Mapped[sa.UUID | None] = mapped_column(
         UUID(as_uuid=True), sa.ForeignKey("blocking_reasons.id"), nullable=True
     )
-    moderator_id: Mapped[sa.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
-    moderator_comment: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
-    date_created: Mapped[sa.DateTime] = mapped_column(
-        sa.DateTime(timezone=True), server_default=func.now(), nullable=False
+    assigned_moderator_id: Mapped[sa.UUID | None] = mapped_column(
+        "moderator_id", UUID(as_uuid=True), nullable=True
     )
-    date_updated: Mapped[sa.DateTime] = mapped_column(
-        sa.DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
-    )
-    date_moderation: Mapped[sa.DateTime | None] = mapped_column(
+    claimed_at: Mapped[sa.DateTime | None] = mapped_column(
         sa.DateTime(timezone=True), nullable=True
+    )
+    claim_expires_at: Mapped[sa.DateTime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    decision_comment: Mapped[str | None] = mapped_column(
+        "moderator_comment", sa.Text, nullable=True
+    )
+    created_at: Mapped[sa.DateTime] = mapped_column(
+        "date_created", sa.DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[sa.DateTime] = mapped_column(
+        "date_updated", sa.DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    decision_at: Mapped[sa.DateTime | None] = mapped_column(
+        "date_moderation", sa.DateTime(timezone=True), nullable=True
     )
 
     __table_args__ = (

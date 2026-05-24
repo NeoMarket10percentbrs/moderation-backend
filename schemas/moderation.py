@@ -1,78 +1,88 @@
 from datetime import datetime
-from typing import Generic, List, TypeVar
+from enum import Enum
+from uuid import UUID
 from pydantic import BaseModel, Field
-
-T = TypeVar('T')
-
-class GetNextRequest(BaseModel):
-    queue_id: int | None = Field(default=None, alias="queueId")
-
-    class Config:
-        populate_by_name = True
+from schemas.blocking_reason import BlockingReasonResponse
 
 
-class FieldReportIn(BaseModel):
-    field_name: str
-    sku_id: str | None = None
-    comment: str
+class TicketKind(str, Enum):
+    CREATE = "CREATE"
+    EDIT = "EDIT"
 
 
-class DeclineRequest(BaseModel):
-    blocking_reason_id: str
-    moderator_comment: str | None = None
-    field_reports: list[FieldReportIn]
+class TicketStatus(str, Enum):
+    PENDING = "PENDING"
+    IN_REVIEW = "IN_REVIEW"
+    APPROVED = "APPROVED"
+    BLOCKED = "BLOCKED"
+    HARD_BLOCKED = "HARD_BLOCKED"
 
 
-class BlockingReasonOut(BaseModel):
-    id: str
-    title: str
-    hard_block: bool
+class QueueClaimRequest(BaseModel):
+    queue_priority: int | None = Field(default=None, ge=1, le=4)
+    category_ids: list[UUID] | None = None
+
+
+class FieldReportSeverity(str, Enum):
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+
+
+class FieldReport(BaseModel):
+    field_path: str
+    message: str = Field(max_length=1000)
+    severity: FieldReportSeverity = FieldReportSeverity.ERROR
+
+
+class TicketHistoryEntry(BaseModel):
+    at: datetime
+    action: str
+    moderator_id: UUID | None = None
+    comment: str | None = None
+
+
+class TicketResponse(BaseModel):
+    id: UUID
+    product_id: UUID
+    seller_id: UUID
+    category_id: UUID | None = None
+    kind: TicketKind
+    status: TicketStatus
+    queue_priority: int = Field(ge=1, le=4)
+    assigned_moderator_id: UUID | None = None
+    claimed_at: datetime | None = None
+    claim_expires_at: datetime | None = None
+    decision_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime | None = None
 
     class Config:
         from_attributes = True
 
 
-class FieldReportOut(BaseModel):
-    id: str
-    field_name: str
-    sku_id: str | None
-    comment: str
-
-    class Config:
-        from_attributes = True
-
-
-class BlockingHistory(BaseModel):
-    blocking_reason: BlockingReasonOut | None = None
-    field_reports: list[FieldReportOut] = Field(default_factory=list)
-
-
-class ProductModerationCard(BaseModel):
-    id: str
-    product_id: str
-    seller_id: str
-    status: str
-    queue_priority: int
-    total_active_quantity: int
-    json_before: dict | None
+class TicketDetailResponse(TicketResponse):
+    json_before: dict | None = None
     json_after: dict
-    blocking_reason_id: str | None
-    moderator_id: str | None
-    moderator_comment: str | None
-    date_created: datetime
-    date_updated: datetime
-    date_moderation: datetime | None
-    blocking_history: BlockingHistory | None = None
+    diff: list[dict] | None = None
+    field_reports: list[FieldReport] = Field(default_factory=list)
+    blocking_reasons: list[BlockingReasonResponse] = Field(default_factory=list)
+    decision_comment: str | None = None
+    history: list[TicketHistoryEntry] = Field(default_factory=list)
 
-    class Config:
-        from_attributes = True
 
-class PaginatedResult(BaseModel, Generic[T]):
+class BlockDecisionRequest(BaseModel):
+    blocking_reason_ids: list[UUID] = Field(min_length=1)
+    comment: str | None = Field(default=None, max_length=2000)
+    field_reports: list[FieldReport] = Field(default_factory=list)
+
+
+class ApproveRequest(BaseModel):
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+class PaginatedTickets(BaseModel):
+    items: list[TicketResponse]
+    total_count: int
     limit: int
-    page: int
-    total_pages: int
-    total_items: int
-    data: List[T]
-
-class ProductModerationPaginatedResult(PaginatedResult[ProductModerationCard]):
-    ...
+    offset: int

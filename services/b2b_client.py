@@ -1,13 +1,15 @@
 import httpx
-from fastapi import HTTPException, status
+from fastapi import status
 from core.config import settings
+from core.errors import raise_api_error
 
 
 async def fetch_product(product_id: str) -> dict:
     if not settings.B2B_SERVICE_URL:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="B2B_SERVICE_URL not configured",
+        raise_api_error(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "INTERNAL_ERROR",
+            "B2B service URL is not configured",
         )
 
     url = f"{settings.B2B_SERVICE_URL}/api/products/{product_id}"
@@ -16,15 +18,17 @@ async def fetch_product(product_id: str) -> dict:
         async with httpx.AsyncClient() as client:
             response = await client.get(url, headers=headers, timeout=15.0)
     except httpx.RequestError:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to fetch product from B2B",
+        raise_api_error(
+            status.HTTP_502_BAD_GATEWAY,
+            "BAD_GATEWAY",
+            "Failed to fetch product from B2B",
         )
 
     if response.status_code >= 400:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to fetch product from B2B",
+        raise_api_error(
+            status.HTTP_502_BAD_GATEWAY,
+            "BAD_GATEWAY",
+            "Failed to fetch product from B2B",
         )
 
     product_data = response.json()
@@ -34,26 +38,29 @@ async def fetch_product(product_id: str) -> dict:
 
 async def send_moderation_event(payload: dict) -> None:
     if not settings.B2B_SERVICE_URL:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="B2B_SERVICE_URL not configured",
+        raise_api_error(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "INTERNAL_ERROR",
+            "B2B service URL is not configured",
         )
 
-    url = f"{settings.B2B_SERVICE_URL}/api/products/events"
+    url = f"{settings.B2B_SERVICE_URL}/api/v1/moderation/events"
     headers = {"X-Service-Key": settings.MOD_SERVICE_KEY}
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, headers=headers, timeout=15.0)
     except httpx.RequestError:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to send moderation event to B2B",
+        raise_api_error(
+            status.HTTP_502_BAD_GATEWAY,
+            "BAD_GATEWAY",
+            "Failed to send moderation event to B2B",
         )
 
     if response.status_code >= 400:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to send moderation event to B2B",
+        raise_api_error(
+            status.HTTP_502_BAD_GATEWAY,
+            "BAD_GATEWAY",
+            "Failed to send moderation event to B2B",
         )
 
 
