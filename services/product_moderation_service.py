@@ -86,6 +86,20 @@ async def handle_b2b_event(db: AsyncSession, payload: IncomingB2BEvent) -> bool:
             )
             db.add(ticket)
             await db.flush()
+        elif payload.event_type == B2BEventType.PRODUCT_EDITED and ticket.status == "HARD_BLOCKED":
+            db.add(
+                ProcessedEvent(
+                    sender_service="b2b",
+                    idempotency_key=payload.idempotency_key,
+                    response_cached={"status": "accepted"},
+                    processed_at=_now(),
+                )
+            )
+            try:
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
+            return False
 
         ticket.category_id = data.category_id
         ticket.kind = kind
@@ -219,6 +233,8 @@ async def list_tickets(
 
 
 async def release_ticket(db: AsyncSession, ticket: Ticket, moderator_id: uuid.UUID, is_admin: bool) -> None:
+    if ticket.status == "HARD_BLOCKED":
+        raise_api_error(403, "FORBIDDEN", "Ticket is hard blocked")
     if ticket.status != "IN_REVIEW":
         raise_api_error(409, "TICKET_WRONG_STATUS", "Ticket is not in review")
     if not is_admin and ticket.assigned_moderator_id != moderator_id:
@@ -238,6 +254,8 @@ async def approve_ticket(
     moderator_id: uuid.UUID,
     comment: str | None = None,
 ) -> None:
+    if ticket.status == "HARD_BLOCKED":
+        raise_api_error(403, "FORBIDDEN", "Ticket is hard blocked")
     if ticket.status != "IN_REVIEW":
         raise_api_error(409, "TICKET_WRONG_STATUS", "Ticket is not in review")
     if ticket.assigned_moderator_id != moderator_id:
@@ -274,6 +292,8 @@ async def block_ticket(
     moderator_id: uuid.UUID,
     data: BlockDecisionRequest,
 ) -> None:
+    if ticket.status == "HARD_BLOCKED":
+        raise_api_error(403, "FORBIDDEN", "Ticket is hard blocked")
     if ticket.status != "IN_REVIEW":
         raise_api_error(409, "TICKET_WRONG_STATUS", "Ticket is not in review")
     if ticket.assigned_moderator_id != moderator_id:
