@@ -10,6 +10,7 @@ from schemas.moderator import ModeratorCreateRequest, ModeratorRole
 from schemas.events import (
 	IncomingB2BEvent,
 	B2BEventType,
+	EventProductCreated,
 	EventProductEdited,
 	EventProductDeleted,
 )
@@ -78,7 +79,13 @@ async def test_hard_block_transitions_to_terminal_and_emits_event(client, db_ses
 	resp = await client.post(
 		f"/api/v1/tickets/{ticket.id}/block",
 		headers={"Authorization": f"Bearer {token}"},
-		json={"blocking_reason_ids": [str(reason.id)], "comment": "Permanent", "field_reports": []},
+		json={
+			"blocking_reason_ids": [str(reason.id)],
+			"comment": "Permanent",
+			"field_reports": [
+				{"field_path": "title", "message": "Forbidden title", "severity": "ERROR"}
+			],
+		},
 	)
 
 	assert resp.status_code == 200
@@ -88,6 +95,14 @@ async def test_hard_block_transitions_to_terminal_and_emits_event(client, db_ses
 	assert captured.get("occurred_at")
 	datetime.fromisoformat(captured["occurred_at"])
 	assert captured.get("hard_block") is True
+	assert captured.get("blocking_reason_id") == str(reason.id)
+	assert captured.get("field_reports") == [
+		{"field_name": "title", "comment": "Forbidden title"}
+	]
+	assert "blocking_reason_ids" not in captured
+	assert "field_path" not in captured["field_reports"][0]
+	assert "message" not in captured["field_reports"][0]
+	assert "severity" not in captured["field_reports"][0]
 
 
 @pytest.mark.asyncio
@@ -212,6 +227,46 @@ async def test_edited_event_on_hard_blocked_is_ignored(client, db_session, monke
 	await product_moderation_service.handle_b2b_event(db_session, event)
 
 	
+	await db_session.refresh(ticket)
+	assert ticket.status == "HARD_BLOCKED"
+
+
+@pytest.mark.asyncio
+async def test_created_event_on_hard_blocked_is_ignored(client, db_session, monkeypatch):
+	moderator = await _create_moderator(db_session, "hb6@example.com", ModeratorRole.MODERATOR)
+	ticket = await _create_ticket(db_session, moderator.id, json_after={"skus": [{"id": str(uuid.uuid4())}]})
+
+	reason = await create_blocking_reason(db_session, code="FORBIDDEN_GOODS5", title="Forbidden5", description="", hard_block=True)
+	await db_session.commit()
+	await db_session.refresh(reason)
+
+	async def _fake_send(_: dict) -> None:
+		return None
+
+	monkeypatch.setattr(product_moderation_service, "send_moderation_event", _fake_send)
+
+	await product_moderation_service.block_ticket(
+		db_session,
+		ticket,
+		moderator.id,
+		type("D", (), {"blocking_reason_ids": [reason.id], "field_reports": [], "comment": "x"})(),
+	)
+
+	event = IncomingB2BEvent(
+		event_type=B2BEventType.PRODUCT_CREATED,
+		idempotency_key=uuid.uuid4(),
+		occurred_at=datetime.now(timezone.utc),
+		payload=EventProductCreated(
+			product_id=ticket.product_id,
+			seller_id=ticket.seller_id,
+			category_id=ticket.category_id,
+			queue_priority=1,
+			json_after={"skus": [{"id": str(uuid.uuid4())}]},
+		),
+	)
+
+	await product_moderation_service.handle_b2b_event(db_session, event)
+
 	await db_session.refresh(ticket)
 	assert ticket.status == "HARD_BLOCKED"
 

@@ -86,6 +86,20 @@ async def handle_b2b_event(db: AsyncSession, payload: IncomingB2BEvent) -> bool:
             )
             db.add(ticket)
             await db.flush()
+        elif payload.event_type == B2BEventType.PRODUCT_CREATED and ticket.status == "HARD_BLOCKED":
+            db.add(
+                ProcessedEvent(
+                    sender_service="b2b",
+                    idempotency_key=payload.idempotency_key,
+                    response_cached={"status": "accepted"},
+                    processed_at=_now(),
+                )
+            )
+            try:
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
+            return False
         elif payload.event_type == B2BEventType.PRODUCT_EDITED and ticket.status == "HARD_BLOCKED":
             db.add(
                 ProcessedEvent(
@@ -341,13 +355,12 @@ async def block_ticket(
         "event_type": "BLOCKED",
         "occurred_at": ticket.decision_at.isoformat(),
         "hard_block": bool(is_hard_block),
-        "blocking_reason_ids": [str(reason.id) for reason in reasons],
+        "blocking_reason_id": str(reasons[0].id) if reasons else None,
         "comment": data.comment or "",
         "field_reports": [
             {
-                "field_path": report.field_path,
-                "message": report.message,
-                "severity": report.severity,
+                "field_name": report.field_path,
+                "comment": report.message,
             }
             for report in data.field_reports
         ],
