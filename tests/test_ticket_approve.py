@@ -83,6 +83,8 @@ async def test_approve_transitions_to_moderated_and_emits_event(client, db_sessi
 	assert body["status"] == "APPROVED"
 	assert captured["event_type"] == "MODERATED"
 	assert captured["product_id"] == str(ticket.product_id)
+	assert captured["occurred_at"]
+	datetime.fromisoformat(captured["occurred_at"])
 
 
 @pytest.mark.asyncio

@@ -276,6 +276,7 @@ async def approve_ticket(
         "idempotency_key": str(uuid.uuid4()),
         "product_id": str(ticket.product_id),
         "event_type": "MODERATED",
+        "occurred_at": ticket.decision_at.isoformat(),
     }
 
     try:
@@ -338,6 +339,7 @@ async def block_ticket(
         "idempotency_key": str(uuid.uuid4()),
         "product_id": str(ticket.product_id),
         "event_type": "BLOCKED",
+        "occurred_at": ticket.decision_at.isoformat(),
         "hard_block": bool(is_hard_block),
         "blocking_reason_ids": [str(reason.id) for reason in reasons],
         "comment": data.comment or "",

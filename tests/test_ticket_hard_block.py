@@ -85,6 +85,8 @@ async def test_hard_block_transitions_to_terminal_and_emits_event(client, db_ses
 	body = resp.json()
 	assert body["status"] == "HARD_BLOCKED"
 	assert captured.get("event_type") == "BLOCKED"
+	assert captured.get("occurred_at")
+	datetime.fromisoformat(captured["occurred_at"])
 	assert captured.get("hard_block") is True
 
 
