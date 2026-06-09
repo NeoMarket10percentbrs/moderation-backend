@@ -1,14 +1,29 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import uuid
 import sqlalchemy as sa
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
-from models import Ticket, ProcessedEvent, FieldReport, BlockingReason, TicketHistory, TicketBlockingReason
-from schemas.events import IncomingB2BEvent, B2BEventType, EventProductCreated, EventProductEdited, EventProductDeleted
+from models import (
+    Ticket,
+    ProcessedEvent,
+    FieldReport,
+    BlockingReason,
+    TicketHistory,
+    TicketBlockingReason,
+)
+from schemas.events import (
+    IncomingB2BEvent,
+    B2BEventType,
+    EventProductCreated,
+    EventProductEdited,
+)
 from schemas.moderation import (
-    TicketResponse, TicketDetailResponse, FieldReport as FieldReportSchema,
-    TicketHistoryEntry, BlockDecisionRequest
+    TicketResponse,
+    TicketDetailResponse,
+    FieldReport as FieldReportSchema,
+    TicketHistoryEntry,
+    BlockDecisionRequest,
 )
 from schemas.blocking_reason import BlockingReasonResponse
 from core.errors import raise_api_error
@@ -34,12 +49,14 @@ async def add_history_entry(
     moderator_id: uuid.UUID | None = None,
     comment: str | None = None,
 ) -> None:
-    db.add(TicketHistory(
-        ticket_id=ticket_id,
-        action=action,
-        moderator_id=moderator_id,
-        comment=comment,
-    ))
+    db.add(
+        TicketHistory(
+            ticket_id=ticket_id,
+            action=action,
+            moderator_id=moderator_id,
+            comment=comment,
+        )
+    )
 
 
 async def handle_b2b_event(db: AsyncSession, payload: IncomingB2BEvent) -> bool:
@@ -86,7 +103,10 @@ async def handle_b2b_event(db: AsyncSession, payload: IncomingB2BEvent) -> bool:
             )
             db.add(ticket)
             await db.flush()
-        elif payload.event_type == B2BEventType.PRODUCT_CREATED and ticket.status == "HARD_BLOCKED":
+        elif (
+            payload.event_type == B2BEventType.PRODUCT_CREATED
+            and ticket.status == "HARD_BLOCKED"
+        ):
             db.add(
                 ProcessedEvent(
                     sender_service="b2b",
@@ -100,7 +120,10 @@ async def handle_b2b_event(db: AsyncSession, payload: IncomingB2BEvent) -> bool:
             except IntegrityError:
                 await db.rollback()
             return False
-        elif payload.event_type == B2BEventType.PRODUCT_EDITED and ticket.status == "HARD_BLOCKED":
+        elif (
+            payload.event_type == B2BEventType.PRODUCT_EDITED
+            and ticket.status == "HARD_BLOCKED"
+        ):
             db.add(
                 ProcessedEvent(
                     sender_service="b2b",
@@ -132,7 +155,9 @@ async def handle_b2b_event(db: AsyncSession, payload: IncomingB2BEvent) -> bool:
             delete(FieldReport).where(FieldReport.product_moderation_id == ticket.id)
         )
         await db.execute(
-            delete(TicketBlockingReason).where(TicketBlockingReason.ticket_id == ticket.id)
+            delete(TicketBlockingReason).where(
+                TicketBlockingReason.ticket_id == ticket.id
+            )
         )
         await add_history_entry(db, ticket.id, "CREATED")
 
@@ -151,6 +176,7 @@ async def handle_b2b_event(db: AsyncSession, payload: IncomingB2BEvent) -> bool:
         await db.rollback()
 
     return False
+
 
 def _to_ticket_response(ticket: Ticket) -> TicketResponse:
     return TicketResponse.model_validate(ticket)
@@ -179,7 +205,8 @@ async def build_ticket_detail(db: AsyncSession, ticket: Ticket) -> TicketDetailR
     reasons = reasons_result.scalars().all()
 
     history_result = await db.execute(
-        select(TicketHistory).where(TicketHistory.ticket_id == ticket.id)
+        select(TicketHistory)
+        .where(TicketHistory.ticket_id == ticket.id)
         .order_by(TicketHistory.at.asc())
     )
     history = history_result.scalars().all()
@@ -193,7 +220,9 @@ async def build_ticket_detail(db: AsyncSession, ticket: Ticket) -> TicketDetailR
         )
         for fr in field_reports
     ]
-    detail.blocking_reasons = [BlockingReasonResponse.model_validate(r) for r in reasons]
+    detail.blocking_reasons = [
+        BlockingReasonResponse.model_validate(r) for r in reasons
+    ]
     detail.decision_comment = ticket.decision_comment
     detail.history = [
         TicketHistoryEntry(
@@ -238,7 +267,8 @@ async def list_tickets(
     total = count_result.scalar() or 0
 
     result = await db.execute(
-        select(Ticket).where(*filters)
+        select(Ticket)
+        .where(*filters)
         .order_by(Ticket.created_at.desc())
         .offset(offset)
         .limit(limit)
@@ -246,13 +276,17 @@ async def list_tickets(
     return result.scalars().all(), total
 
 
-async def release_ticket(db: AsyncSession, ticket: Ticket, moderator_id: uuid.UUID, is_admin: bool) -> None:
+async def release_ticket(
+    db: AsyncSession, ticket: Ticket, moderator_id: uuid.UUID, is_admin: bool
+) -> None:
     if ticket.status == "HARD_BLOCKED":
         raise_api_error(403, "FORBIDDEN", "Ticket is hard blocked")
     if ticket.status != "IN_REVIEW":
         raise_api_error(409, "TICKET_WRONG_STATUS", "Ticket is not in review")
     if not is_admin and ticket.assigned_moderator_id != moderator_id:
-        raise_api_error(409, "TICKET_WRONG_OWNER", "Ticket is assigned to another moderator")
+        raise_api_error(
+            409, "TICKET_WRONG_OWNER", "Ticket is assigned to another moderator"
+        )
 
     ticket.status = "PENDING"
     ticket.assigned_moderator_id = None
@@ -282,8 +316,12 @@ async def approve_ticket(
     ticket.decision_comment = comment
     ticket.blocking_reason_id = None
 
-    await db.execute(delete(FieldReport).where(FieldReport.product_moderation_id == ticket.id))
-    await db.execute(delete(TicketBlockingReason).where(TicketBlockingReason.ticket_id == ticket.id))
+    await db.execute(
+        delete(FieldReport).where(FieldReport.product_moderation_id == ticket.id)
+    )
+    await db.execute(
+        delete(TicketBlockingReason).where(TicketBlockingReason.ticket_id == ticket.id)
+    )
     await add_history_entry(db, ticket.id, "APPROVED", moderator_id)
 
     payload = {
@@ -312,7 +350,9 @@ async def block_ticket(
     if ticket.status != "IN_REVIEW":
         raise_api_error(409, "TICKET_WRONG_STATUS", "Ticket is not in review")
     if ticket.assigned_moderator_id != moderator_id:
-        raise_api_error(409, "TICKET_WRONG_OWNER", "Ticket is assigned to another moderator")
+        raise_api_error(
+            409, "TICKET_WRONG_OWNER", "Ticket is assigned to another moderator"
+        )
 
     reasons_result = await db.execute(
         select(BlockingReason).where(BlockingReason.id.in_(data.blocking_reason_ids))
@@ -321,16 +361,22 @@ async def block_ticket(
     if len(reasons) != len(data.blocking_reason_ids):
         raise_api_error(404, "NOT_FOUND", "Blocking reason not found")
 
-    await db.execute(delete(FieldReport).where(FieldReport.product_moderation_id == ticket.id))
-    await db.execute(delete(TicketBlockingReason).where(TicketBlockingReason.ticket_id == ticket.id))
+    await db.execute(
+        delete(FieldReport).where(FieldReport.product_moderation_id == ticket.id)
+    )
+    await db.execute(
+        delete(TicketBlockingReason).where(TicketBlockingReason.ticket_id == ticket.id)
+    )
 
     for report in data.field_reports:
-        db.add(FieldReport(
-            product_moderation_id=ticket.id,
-            field_path=report.field_path,
-            message=report.message,
-            severity=report.severity,
-        ))
+        db.add(
+            FieldReport(
+                product_moderation_id=ticket.id,
+                field_path=report.field_path,
+                message=report.message,
+                severity=report.severity,
+            )
+        )
 
     for reason in reasons:
         db.add(TicketBlockingReason(ticket_id=ticket.id, reason_id=reason.id))
@@ -372,3 +418,58 @@ async def block_ticket(
     except Exception:
         await db.rollback()
         raise
+
+
+async def get_next_card(
+    db: AsyncSession,
+    moderator_id: str | uuid.UUID,
+    queue_id: uuid.UUID | None = None,
+) -> Ticket | None:
+    """
+    Get the next pending ticket for moderation and claim it for the moderator.
+    Returns the ticket or None if no pending tickets are available.
+    """
+    if isinstance(moderator_id, str):
+        moderator_id = uuid.UUID(moderator_id)
+
+    # Check if moderator already has a ticket in review
+    result = await db.execute(
+        select(Ticket).where(
+            Ticket.status == "IN_REVIEW",
+            Ticket.assigned_moderator_id == moderator_id,
+        )
+    )
+    existing_ticket = result.scalar_one_or_none()
+    if existing_ticket:
+        return None  # Moderator already has a ticket
+
+    # Build filters
+    filters = [Ticket.status == "PENDING"]
+    if queue_id is not None:
+        filters.append(Ticket.category_id == queue_id)
+
+    # Get the oldest pending ticket (by priority, then by creation time)
+    stmt = (
+        sa.select(Ticket)
+        .where(*filters)
+        .order_by(Ticket.queue_priority.asc(), Ticket.created_at.asc())
+        .with_for_update(skip_locked=True)
+        .limit(1)
+    )
+
+    result = await db.execute(stmt)
+    ticket = result.scalar_one_or_none()
+    if not ticket:
+        return None
+
+    # Claim the ticket
+    now = datetime.now(timezone.utc)
+    ticket.status = "IN_REVIEW"
+    ticket.assigned_moderator_id = moderator_id
+    ticket.claimed_at = now
+    ticket.claim_expires_at = now + timedelta(minutes=30)
+    await db.flush()
+
+    await add_history_entry(db, ticket.id, "CLAIMED", moderator_id)
+
+    return ticket
