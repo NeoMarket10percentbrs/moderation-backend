@@ -178,8 +178,7 @@ async def test_empty_queue_returns_204(client, db_session):
 @pytest.mark.asyncio
 async def test_moderator_already_has_in_review_returns_409(client, db_session):
     """
-    When a moderator already has a ticket IN_REVIEW, get-next returns 409 Conflict
-    or doesn't return another ticket.
+    When a moderator already has a ticket IN_REVIEW, get-next returns 409 Conflict.
     """
     # Create a pending ticket
     ticket = await _create_pending_ticket(db_session, queue_priority=3)
@@ -202,15 +201,13 @@ async def test_moderator_already_has_in_review_returns_409(client, db_session):
     ticket2 = await _create_pending_ticket(db_session, queue_priority=3)
     await db_session.commit()
 
-    # Second request - should return 204 because moderator already has a ticket
+    # Second request - should return 409 because moderator already has a ticket
     response2 = await client.post(
         "/api/v1/product-moderation/get-next",
         headers={"Authorization": f"Bearer {token}"},
     )
 
-    # Depending on implementation, could be 204 (no content) or 409 (conflict)
-    # Based on current implementation, returns 204
-    assert response2.status_code == 204
+    assert response2.status_code == 409
 
 
 @pytest.mark.asyncio

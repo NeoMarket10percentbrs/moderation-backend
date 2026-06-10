@@ -427,6 +427,7 @@ async def get_next_card(
 ) -> Ticket | None:
     """
     Get the next pending ticket for moderation and claim it for the moderator.
+    Raises 409 Conflict if the moderator already has an active ticket.
     Returns the ticket or None if no pending tickets are available.
     """
     if isinstance(moderator_id, str):
@@ -441,7 +442,8 @@ async def get_next_card(
     )
     existing_ticket = result.scalar_one_or_none()
     if existing_ticket:
-        return None  # Moderator already has a ticket
+        raise_api_error(409, "MODERATOR_HAS_ACTIVE_TICKET", 
+                        "Moderator already has an active ticket in review")
 
     # Build filters
     filters = [Ticket.status == "PENDING"]

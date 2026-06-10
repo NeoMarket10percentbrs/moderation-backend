@@ -5,6 +5,7 @@ from .tickets.tickets_router import tickets_router
 from .blocking_reasons.blocking_reasons_router import blocking_reasons_router
 from .stats.stats_router import stats_router
 from .b2b.b2b_router import b2b_router
+from .moderation.moderation_router import moderation_router
 
 routes = [
     auth_router,
@@ -14,4 +15,5 @@ routes = [
     blocking_reasons_router,
     stats_router,
     b2b_router,
+    moderation_router,
 ]
