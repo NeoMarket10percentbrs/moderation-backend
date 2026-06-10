@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 pytestmark = pytest.mark.asyncio
 
@@ -66,7 +66,7 @@ async def test_next_returns_oldest_pending(client, db_session):
     ticket1 = await _create_pending_ticket(db_session, queue_priority=3)
     await db_session.commit()
     # Small delay to ensure different timestamps
-    await db_session.execute("SELECT pg_sleep(0.01)")
+    await db_session.execute(text("SELECT pg_sleep(0.01)"))
     ticket2 = await _create_pending_ticket(
         db_session, queue_priority=2
     )  # Higher priority
@@ -115,7 +115,6 @@ async def test_concurrent_two_moderators_get_different_cards(client, db_session)
     # Create two pending tickets
     ticket1 = await _create_pending_ticket(db_session, queue_priority=3)
     await db_session.commit()
-    await db_session.execute("SELECT pg_sleep(0.01)")
     ticket2 = await _create_pending_ticket(db_session, queue_priority=3)
     await db_session.commit()
 
@@ -217,19 +216,19 @@ async def test_next_respects_queue_priority(client, db_session):
     then by creation time (oldest first).
     """
     # Create tickets with different priorities and times
-    await db_session.execute("SELECT pg_sleep(0.01)")
+    await db_session.execute(text("SELECT pg_sleep(0.01)"))
     ticket_low = await _create_pending_ticket(
         db_session, queue_priority=4
     )  # Lowest priority
     await db_session.commit()
 
-    await db_session.execute("SELECT pg_sleep(0.01)")
+    await db_session.execute(text("SELECT pg_sleep(0.01)"))
     ticket_high = await _create_pending_ticket(
         db_session, queue_priority=1
     )  # Highest priority
     await db_session.commit()
 
-    await db_session.execute("SELECT pg_sleep(0.01)")
+    await db_session.execute(text("SELECT pg_sleep(0.01)"))
     ticket_med = await _create_pending_ticket(db_session, queue_priority=2)
     await db_session.commit()
 
@@ -246,10 +245,10 @@ async def test_next_respects_queue_priority(client, db_session):
     assert response1.status_code == 200
     assert response1.json()["id"] == str(ticket_high.id)
 
-    # Second request should get medium priority (2)
+    # Second request - moderator already has a ticket in review
     response2 = await client.post(
         "/api/v1/product-moderation/get-next",
         headers={"Authorization": f"Bearer {token}"},
     )
-    # Returns 204 because moderator already has a ticket
-    assert response2.status_code == 204
+    # Returns 409 because moderator already has a ticket
+    assert response2.status_code == 409

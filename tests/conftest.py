@@ -10,13 +10,15 @@ import models
 
 
 async def _truncate_all(session):
-    
+    # Expunge all pending objects to avoid flush after truncate
+    session.expunge_all()
+
     await session.execute(
         sa.text(
             "TRUNCATE TABLE "
-            "ticket_blocking_reasons, "
             "ticket_history, "
             "field_reports, "
+            "ticket_blocking_reasons, "
             "processed_events, "
             "refresh_tokens, "
             "product_moderation, "
@@ -30,7 +32,7 @@ async def _truncate_all(session):
 
 @pytest.fixture(autouse=True)
 async def init_db():
-    
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield
@@ -54,7 +56,10 @@ async def client(db_session):
 
     app.dependency_overrides[get_db] = _override_get_db
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://moderation-app.moderation-backend.orb.local",
+    ) as ac:
         yield ac
 
     app.dependency_overrides.clear()

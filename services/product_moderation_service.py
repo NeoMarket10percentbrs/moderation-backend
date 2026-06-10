@@ -192,6 +192,9 @@ async def get_ticket(db: AsyncSession, ticket_id: str) -> Ticket:
 
 
 async def build_ticket_detail(db: AsyncSession, ticket: Ticket) -> TicketDetailResponse:
+    # Refresh to ensure all columns are loaded and avoid lazy loading issues with Pydantic
+    await db.refresh(ticket)
+
     field_reports_result = await db.execute(
         select(FieldReport).where(FieldReport.product_moderation_id == ticket.id)
     )
@@ -211,28 +214,45 @@ async def build_ticket_detail(db: AsyncSession, ticket: Ticket) -> TicketDetailR
     )
     history = history_result.scalars().all()
 
-    detail = TicketDetailResponse.model_validate(ticket)
-    detail.field_reports = [
-        FieldReportSchema(
-            field_path=fr.field_path,
-            message=fr.message,
-            severity=fr.severity,
-        )
-        for fr in field_reports
-    ]
-    detail.blocking_reasons = [
-        BlockingReasonResponse.model_validate(r) for r in reasons
-    ]
-    detail.decision_comment = ticket.decision_comment
-    detail.history = [
-        TicketHistoryEntry(
-            at=h.at,
-            action=h.action,
-            moderator_id=h.moderator_id,
-            comment=h.comment,
-        )
-        for h in history
-    ]
+    # Build response manually to avoid lazy loading issues
+    from pydantic import TypeAdapter
+
+    detail = TicketDetailResponse(
+        id=ticket.id,
+        product_id=ticket.product_id,
+        seller_id=ticket.seller_id,
+        category_id=ticket.category_id,
+        kind=ticket.kind,
+        status=ticket.status,
+        queue_priority=ticket.queue_priority,
+        assigned_moderator_id=ticket.assigned_moderator_id,
+        claimed_at=ticket.claimed_at,
+        claim_expires_at=ticket.claim_expires_at,
+        decision_at=ticket.decision_at,
+        created_at=ticket.created_at,
+        updated_at=ticket.updated_at,
+        json_before=ticket.json_before,
+        json_after=ticket.json_after,
+        field_reports=[
+            FieldReportSchema(
+                field_path=fr.field_path,
+                message=fr.message,
+                severity=fr.severity,
+            )
+            for fr in field_reports
+        ],
+        blocking_reasons=[BlockingReasonResponse.model_validate(r) for r in reasons],
+        decision_comment=ticket.decision_comment,
+        history=[
+            TicketHistoryEntry(
+                at=h.at,
+                action=h.action,
+                moderator_id=h.moderator_id,
+                comment=h.comment,
+            )
+            for h in history
+        ],
+    )
     return detail
 
 
@@ -442,8 +462,11 @@ async def get_next_card(
     )
     existing_ticket = result.scalar_one_or_none()
     if existing_ticket:
-        raise_api_error(409, "MODERATOR_HAS_ACTIVE_TICKET", 
-                        "Moderator already has an active ticket in review")
+        raise_api_error(
+            409,
+            "MODERATOR_HAS_ACTIVE_TICKET",
+            "Moderator already has an active ticket in review",
+        )
 
     # Build filters
     filters = [Ticket.status == "PENDING"]
