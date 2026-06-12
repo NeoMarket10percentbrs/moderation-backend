@@ -1,15 +1,18 @@
 from datetime import datetime, timedelta, timezone
 import sqlalchemy as sa
 import uuid
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from models import Ticket, TicketHistory
+from core.errors import raise_api_error
 
 
 async def return_expired_tickets(db: AsyncSession) -> None:
     now = datetime.now(timezone.utc)
     result = await db.execute(
-        sa.select(Ticket)
-        .where(Ticket.status == "IN_REVIEW", Ticket.claim_expires_at < now)
+        sa.select(Ticket).where(
+            Ticket.status == "IN_REVIEW", Ticket.claim_expires_at < now
+        )
     )
     expired = result.scalars().all()
     for ticket in expired:
@@ -18,11 +21,13 @@ async def return_expired_tickets(db: AsyncSession) -> None:
         ticket.assigned_moderator_id = None
         ticket.claimed_at = None
         ticket.claim_expires_at = None
-        db.add(TicketHistory(
-            ticket_id=ticket.id,
-            action="AUTO_RETURNED",
-            moderator_id=moderator_id,
-        ))
+        db.add(
+            TicketHistory(
+                ticket_id=ticket.id,
+                action="AUTO_RETURNED",
+                moderator_id=moderator_id,
+            )
+        )
 
 
 async def claim_next_ticket(
@@ -35,6 +40,21 @@ async def claim_next_ticket(
         moderator_id = uuid.UUID(moderator_id)
 
     await return_expired_tickets(db)
+
+    # Check if moderator already has a ticket in review
+    result = await db.execute(
+        select(Ticket).where(
+            Ticket.status == "IN_REVIEW",
+            Ticket.assigned_moderator_id == moderator_id,
+        )
+    )
+    existing_ticket = result.scalar_one_or_none()
+    if existing_ticket:
+        raise_api_error(
+            409,
+            "MODERATOR_HAS_ACTIVE_TICKET",
+            "Moderator already has an active ticket in review",
+        )
 
     filters = [Ticket.status == "PENDING"]
     if queue_priority is not None:

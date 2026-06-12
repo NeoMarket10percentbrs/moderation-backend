@@ -32,7 +32,9 @@ async def get_next_card(
     if not item:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    return await product_moderation_service.build_ticket_detail(db, item)
+    ticket = await product_moderation_service.build_ticket_detail(db, item)
+    await db.commit()
+    return ticket
 
 
 @moderation_router.post(
