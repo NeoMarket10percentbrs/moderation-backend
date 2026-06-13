@@ -18,4 +18,5 @@ RUN uv sync --frozen --no-cache
 COPY . /app
 
 EXPOSE 5001
-CMD ["uv", "run", "main.py"]
+RUN chmod +x /app/entrypoint.sh
+ENTRYPOINT ["sh", "/app/entrypoint.sh"]
