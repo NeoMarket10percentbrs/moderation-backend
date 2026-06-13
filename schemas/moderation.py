@@ -86,3 +86,11 @@ class PaginatedTickets(BaseModel):
     total_count: int
     limit: int
     offset: int
+
+
+class GetNextRequest(BaseModel):
+    queue_id: UUID | None = None
+
+
+class ProductModerationCard(TicketDetailResponse):
+    pass
